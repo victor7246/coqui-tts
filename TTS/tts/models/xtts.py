@@ -326,6 +326,7 @@ class Xtts(BaseTTS):
     def get_conditioning_latents(
         self,
         audio_path,
+        speaker_weights: list[float] | None = None,
         max_ref_length=30,
         gpt_cond_len=6,
         gpt_cond_chunk_len=6,
@@ -374,12 +375,18 @@ class Xtts(BaseTTS):
         )  # [1, 1024, T]
 
         if speaker_embeddings:
-            speaker_embedding = torch.stack(speaker_embeddings)
-            speaker_embedding = speaker_embedding.mean(dim=0)
+            speaker_embedding = torch.stack(speaker_embeddings)  # [N, D, 1]
+            if speaker_weights is not None:
+                weights = torch.tensor(speaker_weights, dtype=speaker_embedding.dtype, device=speaker_embedding.device).view(-1, 1, 1)
+                weights = weights / weights.sum()
+                weights = weights.unsqueeze(3)  # [N, 1, 1]
+                speaker_embedding = torch.sum(speaker_embedding * weights, dim=0)
+            else:
+                speaker_embedding = speaker_embedding.mean(dim=0)
 
         return gpt_cond_latents, speaker_embedding
 
-    def synthesize(self, text, config, speaker_wav, language, speaker_id=None, **kwargs):
+    def synthesize(self, text, config, speaker_wav, language, speaker_weights: list[float] | None = None, speaker_id=None, **kwargs):
         """Synthesize speech with the given input text.
 
         Args:
@@ -418,7 +425,7 @@ class Xtts(BaseTTS):
                 "sound_norm_refs": config.sound_norm_refs,
             }
         )
-        return self.full_inference(text, speaker_wav, language, **settings)
+        return self.full_inference(text, speaker_wav, language, speaker_weights, **settings)
 
     @torch.inference_mode()
     def full_inference(
@@ -426,6 +433,7 @@ class Xtts(BaseTTS):
         text,
         ref_audio_path,
         language,
+        speaker_weights: list[float] | None = None,
         # GPT inference
         temperature=0.75,
         length_penalty=1.0,
@@ -481,6 +489,7 @@ class Xtts(BaseTTS):
         """
         (gpt_cond_latent, speaker_embedding) = self.get_conditioning_latents(
             audio_path=ref_audio_path,
+            speaker_weights=speaker_weights,
             gpt_cond_len=gpt_cond_len,
             gpt_cond_chunk_len=gpt_cond_chunk_len,
             max_ref_length=max_ref_len,
